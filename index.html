@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerador de Resumo em Áudio com IA</title>
+    <title>Gerador de Resumo em Áudio com IA (v2)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -23,6 +23,13 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800 flex items-center justify-center min-h-screen p-4">
@@ -30,13 +37,20 @@
         <!-- Cabeçalho -->
         <div class="text-center">
             <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Resumo em Áudio com IA</h1>
-            <p class="text-gray-500 mt-2">Cole o seu texto, escolha o estilo e ouça um resumo inteligente.</p>
+            <p class="text-gray-500 mt-2">Cole o seu texto, insira a sua chave de API, escolha o estilo e ouça um resumo inteligente.</p>
         </div>
 
-        <!-- Área de Input -->
+        <!-- NOVO: Campo da Chave de API -->
+        <div class="space-y-2">
+            <label for="apiKeyInput" class="block text-lg font-semibold text-gray-700">Sua Chave de API do Google AI:</label>
+            <input type="password" id="apiKeyInput" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow duration-200" placeholder="Cole a sua chave de API aqui...">
+            <p class="text-xs text-gray-500">A sua chave é usada apenas no seu navegador e não é guardada. <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-blue-600 hover:underline">Obtenha uma chave aqui.</a></p>
+        </div>
+
+        <!-- Área de Input de Texto -->
         <div class="space-y-4">
             <label for="inputText" class="block text-lg font-semibold text-gray-700">Seu Texto:</label>
-            <textarea id="inputText" rows="12" class="w-full p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow duration-200" placeholder="Cole aqui o artigo, relatório ou qualquer texto que deseje resumir..."></textarea>
+            <textarea id="inputText" rows="10" class="w-full p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow duration-200" placeholder="Cole aqui o artigo, relatório ou qualquer texto que deseje resumir..."></textarea>
         </div>
 
         <!-- Controlos -->
@@ -70,12 +84,12 @@
             <!-- Loader -->
             <div id="loader" class="hidden flex flex-col items-center justify-center space-y-2">
                 <div class="loader"></div>
-                <p class="text-gray-500">A IA está a ler, resumir e gravar... Por favor, aguarde.</p>
+                <p id="loaderText" class="text-gray-500">A IA está a ler e a resumir...</p>
             </div>
             <!-- Mensagem de Erro -->
             <div id="errorMessage" class="hidden p-4 bg-red-100 text-red-700 border border-red-300 rounded-lg"></div>
             <!-- Conteúdo do Resultado -->
-            <div id="resultContent" class="hidden space-y-4">
+            <div id="resultContent" class="hidden space-y-4 fade-in">
                 <div>
                     <h2 class="text-2xl font-bold text-gray-900 mb-2">Resumo em Texto</h2>
                     <div id="summaryText" class="p-4 bg-gray-50 border border-gray-200 rounded-lg text-base leading-relaxed"></div>
@@ -90,25 +104,20 @@
 
     <script>
         const generateButton = document.getElementById('generateButton');
+        const apiKeyInput = document.getElementById('apiKeyInput');
         const inputText = document.getElementById('inputText');
         const personaSelect = document.getElementById('persona');
         const lengthSelect = document.getElementById('length');
         const resultsDiv = document.getElementById('results');
         const loader = document.getElementById('loader');
+        const loaderText = document.getElementById('loaderText');
         const errorMessage = document.getElementById('errorMessage');
         const resultContent = document.getElementById('resultContent');
         const summaryTextDiv = document.getElementById('summaryText');
         const audioPlayer = document.getElementById('audioPlayer');
 
-        const apiKey = ""; // Deixe em branco. A Canvas fornecerá a chave.
-
         // --- Funções para Conversão de Áudio ---
 
-        /**
-         * Converte uma string base64 para um ArrayBuffer.
-         * @param {string} base64 - A string base64 a ser decodificada.
-         * @returns {ArrayBuffer} - O ArrayBuffer decodificado.
-         */
         function base64ToArrayBuffer(base64) {
             const binaryString = window.atob(base64);
             const len = binaryString.length;
@@ -119,64 +128,44 @@
             return bytes.buffer;
         }
 
-        /**
-         * Converte dados de áudio PCM brutos para um Blob no formato WAV.
-         * @param {Int16Array} pcmData - Os dados de áudio PCM.
-         * @param {number} sampleRate - A taxa de amostragem do áudio.
-         * @returns {Blob} - Um Blob contendo os dados de áudio em formato WAV.
-         */
         function pcmToWav(pcmData, sampleRate) {
             const numChannels = 1;
             const bitsPerSample = 16;
             const byteRate = sampleRate * numChannels * bitsPerSample / 8;
             const blockAlign = numChannels * bitsPerSample / 8;
-            const dataSize = pcmData.length * 2; // 2 bytes por amostra de 16 bits
+            const dataSize = pcmData.length * 2;
             const buffer = new ArrayBuffer(44 + dataSize);
             const view = new DataView(buffer);
 
-            // Cabeçalho RIFF
+            function writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
             writeString(view, 0, 'RIFF');
             view.setUint32(4, 36 + dataSize, true);
             writeString(view, 8, 'WAVE');
-            
-            // Chunk "fmt "
             writeString(view, 12, 'fmt ');
-            view.setUint32(16, 16, true); // Tamanho do chunk
-            view.setUint16(20, 1, true);  // Formato do áudio (1 = PCM)
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
             view.setUint16(22, numChannels, true);
             view.setUint32(24, sampleRate, true);
             view.setUint32(28, byteRate, true);
             view.setUint16(32, blockAlign, true);
             view.setUint16(34, bitsPerSample, true);
-
-            // Chunk "data"
             writeString(view, 36, 'data');
             view.setUint32(40, dataSize, true);
 
-            // Dados PCM
             for (let i = 0; i < pcmData.length; i++) {
                 view.setInt16(44 + i * 2, pcmData[i], true);
             }
 
             return new Blob([view], { type: 'audio/wav' });
         }
-        
-        function writeString(view, offset, string) {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        }
-
 
         // --- Funções da API Gemini com Retry Exponencial ---
 
-        /**
-         * Faz uma chamada à API com lógica de retry exponencial.
-         * @param {string} url - A URL da API.
-         * @param {object} payload - O corpo da requisição.
-         * @param {number} maxRetries - O número máximo de tentativas.
-         * @returns {Promise<object>} - O resultado da API em JSON.
-         */
         async function fetchWithRetry(url, payload, maxRetries = 3) {
             let attempt = 0;
             while (attempt < maxRetries) {
@@ -188,7 +177,15 @@
                     });
 
                     if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+                        const errorBody = await response.json();
+                        console.error('API Error:', errorBody);
+                        let userMessage = `Erro na API (Status: ${response.status}).`;
+                        if (response.status === 400) {
+                             userMessage = "Erro de autenticação. Verifique se a sua chave de API é válida e se a API Generative Language está ativada no seu projeto Google Cloud.";
+                        } else if (response.status === 429) {
+                            userMessage = "Limite de requisições da API atingido. Por favor, tente novamente mais tarde.";
+                        }
+                        throw new Error(userMessage);
                     }
                     return await response.json();
                 } catch (error) {
@@ -197,20 +194,12 @@
                         throw error;
                     }
                     const delay = Math.pow(2, attempt) * 1000;
-                    // Não loga no console em caso de retry
                     await new Promise(res => setTimeout(res, delay));
                 }
             }
         }
 
-        /**
-         * Gera o resumo em texto.
-         * @param {string} text - O texto original.
-         * @param {string} persona - O estilo do resumo.
-         * @param {string} length - O comprimento do resumo.
-         * @returns {Promise<string>} - O texto do resumo.
-         */
-        async function generateSummary(text, persona, length) {
+        async function generateSummary(apiKey, text, persona, length) {
             const prompts = {
                 jornalista: {
                     curto: `Atue como um jornalista. Resuma o texto a seguir no formato de uma notícia de um parágrafo, focando nos factos mais importantes.`,
@@ -228,11 +217,10 @@
                     longo: `Atue como um investigador académico. Produza uma sinopse detalhada do texto a seguir, com cerca de 200 palavras, explicando os argumentos centrais e a sua fundamentação de forma precisa.`
                 }
             };
-
+            
             const systemPrompt = prompts[persona][length];
             const userQuery = `Texto para resumir:\n\n---\n\n${text}`;
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-
             const payload = {
                 contents: [{ parts: [{ text: userQuery }] }],
                 systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -242,29 +230,14 @@
             return result.candidates?.[0]?.content?.parts?.[0]?.text || "Não foi possível gerar um resumo.";
         }
 
-        /**
-         * Gera o áudio a partir do texto.
-         * @param {string} text - O texto a ser convertido para áudio.
-         * @param {string} persona - O estilo, para escolher a voz.
-         * @returns {Promise<{audioData: string, mimeType: string}>} - Os dados do áudio.
-         */
-        async function generateAudio(text, persona) {
-            const voices = {
-                jornalista: 'Charon', // Voz clara e informativa
-                executivo: 'Orus',   // Voz firme e confiante
-                academico: 'Kore'    // Voz ponderada e firme
-            };
-
+        async function generateAudio(apiKey, text, persona) {
+            const voices = { jornalista: 'Charon', executivo: 'Orus', academico: 'Kore' };
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
             const payload = {
                 contents: [{ parts: [{ text }] }],
                 generationConfig: {
                     responseModalities: ["AUDIO"],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: { voiceName: voices[persona] }
-                        }
-                    }
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voices[persona] } } }
                 },
                 model: "gemini-2.5-flash-preview-tts"
             };
@@ -273,10 +246,7 @@
             const part = result?.candidates?.[0]?.content?.parts?.[0];
             
             if (part?.inlineData?.data && part?.inlineData?.mimeType?.startsWith("audio/")) {
-                return {
-                    audioData: part.inlineData.data,
-                    mimeType: part.inlineData.mimeType
-                };
+                return { audioData: part.inlineData.data, mimeType: part.inlineData.mimeType };
             } else {
                 throw new Error("Resposta da API de áudio inválida.");
             }
@@ -285,17 +255,26 @@
         // --- Lógica Principal do Evento ---
         
         generateButton.addEventListener('click', async () => {
+            const apiKey = apiKeyInput.value.trim();
             const text = inputText.value.trim();
-            if (!text) {
+
+            if (!apiKey) {
+                errorMessage.textContent = 'Por favor, insira a sua chave de API do Google AI.';
                 resultsDiv.style.display = 'block';
-                loader.style.display = 'none';
-                resultContent.style.display = 'none';
                 errorMessage.style.display = 'block';
+                resultContent.style.display = 'none';
+                loader.style.display = 'none';
+                return;
+            }
+            if (!text) {
                 errorMessage.textContent = 'Por favor, insira um texto para resumir.';
+                resultsDiv.style.display = 'block';
+                errorMessage.style.display = 'block';
+                resultContent.style.display = 'none';
+                loader.style.display = 'none';
                 return;
             }
 
-            // Resetar e mostrar loader
             resultsDiv.style.display = 'block';
             errorMessage.style.display = 'none';
             resultContent.style.display = 'none';
@@ -304,14 +283,14 @@
             generateButton.classList.add('opacity-50', 'cursor-not-allowed');
 
             try {
-                // Etapa 1: Gerar Resumo em Texto
+                loaderText.textContent = 'A IA está a ler e a resumir...';
                 const persona = personaSelect.value;
                 const length = lengthSelect.value;
-                const summary = await generateSummary(text, persona, length);
-                summaryTextDiv.innerHTML = summary.replace(/\n/g, '<br>'); // Mantém as quebras de linha
+                const summary = await generateSummary(apiKey, text, persona, length);
+                summaryTextDiv.innerHTML = summary.replace(/\n/g, '<br>');
                 
-                // Etapa 2: Gerar Resumo em Áudio
-                const { audioData, mimeType } = await generateAudio(summary, persona);
+                loaderText.textContent = 'A IA está a gravar o áudio...';
+                const { audioData, mimeType } = await generateAudio(apiKey, summary, persona);
                 
                 const sampleRateMatch = mimeType.match(/rate=(\d+)/);
                 const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
@@ -321,17 +300,17 @@
                 const wavBlob = pcmToWav(pcm16, sampleRate);
                 const audioUrl = URL.createObjectURL(wavBlob);
 
-                // Exibir resultados
                 audioPlayer.src = audioUrl;
-                audioPlayer.play();
+                audioPlayer.oncanplaythrough = () => {
+                  audioPlayer.play();
+                };
                 resultContent.style.display = 'block';
 
             } catch (error) {
-                console.error("Erro ao gerar resumo:", error);
-                errorMessage.textContent = 'Ocorreu um erro ao comunicar com a IA. Por favor, tente novamente mais tarde.';
+                console.error("Erro detalhado:", error);
+                errorMessage.textContent = error.message || 'Ocorreu um erro desconhecido. Verifique a consola para mais detalhes.';
                 errorMessage.style.display = 'block';
             } finally {
-                // Esconder loader e reativar botão
                 loader.style.display = 'none';
                 generateButton.disabled = false;
                 generateButton.classList.remove('opacity-50', 'cursor-not-allowed');
@@ -340,3 +319,4 @@
     </script>
 </body>
 </html>
+
